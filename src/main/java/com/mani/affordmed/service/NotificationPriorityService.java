@@ -100,6 +100,23 @@ public class NotificationPriorityService {
                         .toInstant()
                         .toEpochMilli();
                 } catch (Exception e3) {
+                    // Return current time as fallback
+                    return System.currentTimeMillis();
+                }
+            }
+        }
+    }
+
+    private static class ScoredNotification {
+        Notification notification;
+        double score;
+
+        ScoredNotification(Notification notification, double score) {
+            this.notification = notification;
+            this.score = score;
+        }
+                        .toEpochMilli();
+                } catch (Exception e3) {
                     throw new RuntimeException("Cannot parse timestamp: " + timestamp);
                 }
             }
