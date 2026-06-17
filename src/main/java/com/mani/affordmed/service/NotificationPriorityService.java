@@ -19,9 +19,7 @@ public class NotificationPriorityService {
             return new ArrayList<>();
         }
 
-        // Use PriorityQueue to get top 10
         PriorityQueue<ScoredNotification> pq = new PriorityQueue<>((a, b) -> {
-            // Reverse order: highest score first
             return Double.compare(b.score, a.score);
         });
 
@@ -47,19 +45,13 @@ public class NotificationPriorityService {
     }
 
     private int getTypeWeight(String type) {
-        if (type == null) {
-            return 1;
-        }
-
+        if (type == null) return 1;
+        
         switch (type.toLowerCase()) {
-            case "placement":
-                return 5;
-            case "result":
-                return 4;
-            case "event":
-                return 3;
-            default:
-                return 1;
+            case "placement": return 5;
+            case "result": return 4;
+            case "event": return 3;
+            default: return 1;
         }
     }
 
@@ -74,10 +66,7 @@ public class NotificationPriorityService {
             long ageMs = now - notifTime;
             long ageHours = ageMs / (1000 * 60 * 60);
 
-            // Max 24 hours scored, newer = higher score
-            if (ageHours > 24) {
-                return 0;
-            }
+            if (ageHours > 24) return 0;
             return 24 - ageHours;
         } catch (Exception e) {
             return 0;
@@ -102,22 +91,6 @@ public class NotificationPriorityService {
                 } catch (Exception e3) {
                     // Return current time as fallback
                     return System.currentTimeMillis();
-                }
-            }
-        }
-    }
-
-    private static class ScoredNotification {
-        Notification notification;
-        double score;
-
-        ScoredNotification(Notification notification, double score) {
-            this.notification = notification;
-            this.score = score;
-        }
-                        .toEpochMilli();
-                } catch (Exception e3) {
-                    throw new RuntimeException("Cannot parse timestamp: " + timestamp);
                 }
             }
         }

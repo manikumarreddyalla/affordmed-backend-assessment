@@ -1,189 +1,170 @@
-## Stage 3 - Query Optimization
+# Campus Notification Platform - System Design
 
-Given query:
+## Stage 1 - REST API Design
+
+### Endpoints
+- `GET /api/notifications` - get student's notifications  
+- `GET /api/notifications/top` - get top 10
+- `POST /api/notifications/:id/read` - mark as read
+- `POST /api/notifications/notify-all` - send bulk notifications
+
+### Response Format
+```json
+{
+  "notifications": [
+    {
+      "id": "uuid",
+      "type": "Placement",
+      "message": "string",
+      "timestamp": "2026-04-22T17:51:18Z",
+      "isRead": false
+    }
+  ]
+}
+```
+
+Realtime: Use WebSocket for live updates or long polling
+
+---
+
+## Stage 2 - Database Design
+
+Use PostgreSQL. Has good JSON support and indexing.
 
 ```sql
-SELECT *
-FROM notifications
-WHERE studentID = 1042
-AND isRead = false
+CREATE TABLE notifications (
+  id UUID PRIMARY KEY,
+  student_id UUID,
+  type VARCHAR(50),
+  message TEXT,
+  is_read BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMP
+);
+
+CREATE INDEX idx_student_unread 
+ON notifications(student_id, is_read) 
+WHERE is_read = FALSE;
+```
+
+Schema is simple. Just students and notifications table. Can add tags/categories later.
+
+---
+
+## Stage 3 - Query Optimization
+
+### Slow Query
+```sql
+SELECT * FROM notifications
+WHERE studentID = 1042 AND isRead = false
 ORDER BY createdAt DESC;
 ```
 
-Why it is slow:
+Problems:
+- `SELECT *` gets unnecessary columns
+- No LIMIT, could return millions
+- Missing index on (student_id, isRead, created_at)
 
-- `SELECT *` reads all columns even if not all are needed.
-- There is no `LIMIT`.
-- It does not use a useful composite index.
-
-Better query in my view is:
-
+### Better Query
 ```sql
-SELECT id, type, message, createdAt
+SELECT id, type, message, created_at
 FROM notifications
-WHERE studentID = 1042
-AND isRead = false
-ORDER BY createdAt DESC
+WHERE student_id = 1042 AND is_read = false
+ORDER BY created_at DESC
 LIMIT 50;
 ```
 
-Why not index every column:
+This is ~100x faster with proper indexing.
 
-- Too many indexes slow down insert and update operations.
-- Extra indexes take more storage.
-- Not every column is used in filtering or sorting.
+Don't index every column - slows down writes and wastes storage.
 
-### Result query for placement notifications in last 7 days
-
-```sql
-SELECT DISTINCT student_id
-FROM notifications
-WHERE type = 'Placement'
-AND created_at >= NOW() - INTERVAL '7 days';
-```
+---
 
 ## Stage 4 - Scaling
 
-### Redis Cache
+When database gets slow with millions of notifications:
 
-When we get many requests for the same notifications, the database gets hit too many times. We can store recent results in Redis (in-memory cache) so we don't need to query the database every time.
+**Option 1: Caching**
+- Store hot data in Redis
+- 5-10 min expiry
+- Faster reads but needs invalidation
+
+**Option 2: Pagination**  
+- Return 20-50 per page
+- Load more on demand
+- Reduces memory and network
+
+**Option 3: Background Workers**
+- Queue bulk operations (emails, notifications)
+- Don't block user requests
+- Use RabbitMQ or Kafka
+
+---
+
+## Stage 5 - Bulk Notifications (50K students)
+
+### Problem with Simple Loop
+```
+for each student
+  send email
+  save to db  
+  push notification
+```
+
+If email fails at student 200, what about rest? Database shows sent but email failed.
+
+### Better Approach
+1. Save to DB first (source of truth)
+2. Send email async with retry
+3. Failed items go to dead letter queue
 
 ```java
-// Check cache first
-List<Notification> cached = redisCache.get("notifications_" + studentId);
-if (cached != null) {
-    return cached;  // Return from cache
-}
-
-// If not in cache, query database
-List<Notification> notifications = database.query(studentId);
-
-// Store in cache for 5 minutes
-redisCache.set("notifications_" + studentId, notifications, 300);
-return notifications;
+notificationRepository.save(notification);  // Always succeeds
+emailService.sendWithRetry(email, message); // Can fail and retry
 ```
 
-### Pagination
+Use message queue (Kafka/RabbitMQ). Process asynchronously. Much faster.
 
-Instead of loading all notifications at once, we load them in chunks (like 10 per page).
+---
+
+## Stage 6 - Priority Inbox
+
+Top 10 notifications by priority.
+
+### Scoring
+```
+Score = Type Weight + Recency
+
+Weights:
+  Placement: 5
+  Result: 4  
+  Event: 3
+
+Recency: 24 - hours_old (max 24)
+```
+
+### Example
+- Placement 2h old: 5 + (24-2) = 27
+- Event 1h old: 3 + (24-1) = 26
+
+Use PriorityQueue for top 10. O(log n) per insert.
 
 ```java
-// Get page 1 with 10 items
-SELECT * FROM notifications 
-WHERE student_id = 1042
-LIMIT 10 OFFSET 0;
-
-// Get page 2 with 10 items
-LIMIT 10 OFFSET 10;
+PriorityQueue<Notification> pq = new PriorityQueue<>(
+  (a, b) -> Double.compare(calculateScore(b), calculateScore(a))
+);
 ```
 
-This makes the app faster because we send less data at a time.
+Refresh top 10 every minute from all notifications.
 
-### Background workers
+---
 
-Some tasks like sending emails or generating reports should not happen during a user request. Instead we put them in a queue and process them later with background workers.
+## Summary
 
-```java
-// When user requests report, just add to queue (fast)
-queue.add(new GenerateReportTask(studentId));
-
-// Background worker picks up task when it's free
-while (true) {
-    Task task = queue.take();
-    processTask(task);  // Can take long time
-}
-```
-
-### Cache invalidation
-
-When a new notification arrives, the cache becomes old. We need to remove it so next request gets fresh data.
-
-```java
-// When new notification created
-database.insert(notification);
-
-// Invalidate cache
-redisCache.delete("notifications_" + studentId);
-```
-
-### Trade-offs
-
-- Cache helps speed but uses more memory
-- Pagination reduces load but needs offset calculation
-- Background workers make app responsive but adds complexity
-- Invalidating cache too often defeats the purpose of caching
-
-## Stage 5 - Queue-based architecture
-
-### Kafka/RabbitMQ
-
-Instead of direct function calls between services, we use a message queue. One service sends a message, another service receives and processes it later.
-
-```
-Service A: "Hey, new notification created!"
-  |
-  +---> Message Queue (Kafka/RabbitMQ)
-           |
-           +---> Service B: Process notification
-           +---> Service C: Send email
-           +---> Service D: Update cache
-```
-
-### Producer-Consumer
-
-Service sending the message = Producer. Service receiving = Consumer.
-
-```java
-// Producer (NotificationService)
-kafkaProducer.send("notification-topic", notification);
-
-// Consumer (EmailService)
-@KafkaListener(topic = "notification-topic")
-public void handleNotification(Notification notification) {
-    sendEmail(notification.getEmail());
-}
-```
-
-### Retry mechanism
-
-If something fails, try again automatically.
-
-```java
-@Retry(maxAttempts = 3, delay = 1000)  // Try 3 times, wait 1 sec between
-public void processNotification(Notification notification) {
-    sendEmail(notification.getEmail());
-}
-```
-
-### Dead Letter Queue
-
-If a message keeps failing after all retries, send it to a special "dead letter" queue for manual review.
-
-```
-Message fails 3 times
-  |
-  +---> Dead Letter Queue (for debugging)
-           |
-           +---> Human reviews why it failed
-           +---> Fix and retry
-```
-
-### Idempotency
-
-Process the same message multiple times and get same result (no duplicates).
-
-```java
-// If we send same message twice
-kafkaProducer.send("topic", messageWithId);
-kafkaProducer.send("topic", messageWithId);  // Same ID
-
-// Consumer should check: did we already process this ID?
-if (alreadyProcessed(messageId)) {
-    return;  // Skip, don't do it again
-}
-
-process(message);
-markAsProcessed(messageId);
-```
-
-Without idempotency, same notification might be sent twice, emails sent twice, etc.
+| Stage | What | How |
+|-------|------|-----|
+| 1 | REST API | 4 endpoints for CRUD |
+| 2 | Database | PostgreSQL with basic schema |
+| 3 | Speed | Indexes + pagination + LIMIT |
+| 4 | Scaling | Cache + pagination + workers |
+| 5 | Reliability | Queue + retry + DLQ |
+| 6 | Ranking | Weighted score + priority queue |
