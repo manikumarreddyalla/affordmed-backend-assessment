@@ -1,8 +1,15 @@
 package com.mani.affordmed.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public class Vehicle {
+    @JsonProperty("TaskID")
     private String taskId;
+
+    @JsonProperty("Duration")
     private Integer duration;
+
+    @JsonProperty("Impact")
     private Integer impact;
 
     public Vehicle() {

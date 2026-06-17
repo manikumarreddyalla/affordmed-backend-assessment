@@ -1,9 +1,30 @@
 package com.mani.affordmed.dto;
 
-import lombok.Data;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
-@Data
 public class Depot {
-    private Integer ID;
-    private Integer MechanicHours;
+    @JsonProperty("ID")
+    private Integer id;
+
+    @JsonProperty("MechanicHours")
+    private Integer mechanicHours;
+
+    public Depot() {
+    }
+
+    public Integer getId() {
+        return id;
+    }
+
+    public void setId(Integer id) {
+        this.id = id;
+    }
+
+    public Integer getMechanicHours() {
+        return mechanicHours;
+    }
+
+    public void setMechanicHours(Integer mechanicHours) {
+        this.mechanicHours = mechanicHours;
+    }
 }

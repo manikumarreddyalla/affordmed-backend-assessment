@@ -1,9 +1,18 @@
 package com.mani.affordmed.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 public class Notification {
+    @JsonProperty("ID")
     private String id;
+
+    @JsonProperty("Type")
     private String type;
+
+    @JsonProperty("Message")
     private String message;
+
+    @JsonProperty("Timestamp")
     private String timestamp;
 
     public Notification() {
